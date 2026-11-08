@@ -606,6 +606,14 @@
         document.getElementById('zoom-out').addEventListener('click', () => { targetZoom = Math.max(MIN_ZOOM, targetZoom / 1.3); });
         document.getElementById('zoom-reset').addEventListener('click', () => { targetZoom = MIN_ZOOM; targetOffsetX = 0; targetOffsetY = 0; });
         document.getElementById('search').addEventListener('input', (e) => { searchTerm = e.target.value.toLowerCase(); });
+        // Esc clears the search, wherever the focus is.
+        document.addEventListener('keydown', (e) => {
+            if (e.key !== 'Escape') return;
+            const box = document.getElementById('search');
+            if (!box.value && !searchTerm) return;
+            box.value = ''; searchTerm = '';
+            box.blur();
+        });
         document.getElementById('mention-slider').addEventListener('input', (e) => {
             mentionThreshold = +e.target.value;
             document.getElementById('mention-val').textContent = e.target.value;
@@ -626,7 +634,7 @@
         data = await resp.json();
 
         // Version + last-updated note — bump APP_VERSION on notable UX/pipeline changes.
-        const APP_VERSION = 'v1.19';
+        const APP_VERSION = 'v1.20';
         if (data.generated_at) {
             const d = new Date(data.generated_at);
             const mm = String(d.getMonth() + 1).padStart(2, '0');
