@@ -389,6 +389,33 @@
     let offsetX = 0, offsetY = 0;
     let targetOffsetX = 0, targetOffsetY = 0;
     const MIN_ZOOM = 1.2;  // also the initial / reset zoom
+    const DESC_START = 16; // zoom where descriptions appear under company names
+
+    // A company's description wrapped to a narrow column (max 3 lines), cached
+    // per font size. ctx.font must already be set to the description font.
+    function descLines(point, size) {
+        const key = Math.round(size * 2);
+        if (point._descKey === key) return point._desc;
+        const maxW = size * 19;
+        const words = String(point.description).split(/\s+/);
+        const lines = [];
+        let cur = '';
+        for (const w of words) {
+            const next = cur ? cur + ' ' + w : w;
+            if (ctx.measureText(next).width > maxW && cur) {
+                lines.push(cur);
+                cur = w;
+                if (lines.length === 3) break;
+            } else {
+                cur = next;
+            }
+        }
+        if (lines.length < 3 && cur) lines.push(cur);
+        else if (lines.length === 3 && cur) lines[2] = lines[2].replace(/[,.;:]?$/, '…');
+        point._descKey = key;
+        point._desc = lines;
+        return lines;
+    }
     let zoom = MIN_ZOOM;
     let targetZoom = MIN_ZOOM;
     // Camera-smoothing rate (per second). Frame-rate independent: the actual
@@ -599,7 +626,7 @@
         data = await resp.json();
 
         // Version + last-updated note — bump APP_VERSION on notable UX/pipeline changes.
-        const APP_VERSION = 'v1.18';
+        const APP_VERSION = 'v1.19';
         if (data.generated_at) {
             const d = new Date(data.generated_at);
             const mm = String(d.getMonth() + 1).padStart(2, '0');
@@ -735,6 +762,7 @@
         // labeled territories at rest, not on zoom-in.
         const clusterLabelFadeIn = 1.0;   // cluster names start appearing
         const companyLabelStart = 7.5;    // company names start appearing
+        // (descriptions under the names fade in from DESC_START, see below)
         // After companyLabelStart, cluster labels transition to background layer
 
         // --- Word-wrap cluster name into lines targeting a squarish shape ---
@@ -868,6 +896,7 @@
         }
 
         // --- Entity nodes ---
+        const nameRects = [], descQueue = [];
         for (const point of data.points) {
             if (!isPointVisible(point)) continue;
 
@@ -940,6 +969,46 @@
                 ctx.fillStyle = '#f3eee4';
                 ctx.fillText(point.name, sx + radius + 4, sy);
                 ctx.globalAlpha = 1;
+
+                // Deepest zoom: queue the description; it is drawn after every
+                // name is placed, only where it collides with nothing.
+                const lx = sx + radius + 4;
+                nameRects.push([lx - 2, sy - fs * 0.6, lx + ctx.measureText(point.name).width + 2, sy + fs * 0.6, point]);
+                const da = zoom > DESC_START ? Math.min(1, (zoom - DESC_START) / 4) * la : 0;
+                if (da > 0.05 && point.description && sx > -300 && sx < width && sy > -60 && sy < height + 20) {
+                    descQueue.push({ point, lx, sy, fs, da, first: isHovered || isSearchMatch });
+                }
+            }
+        }
+
+        // Descriptions under names (deepest zoom): hovered/searched first, then
+        // the most-covered companies; any that would overlap a name or an
+        // already drawn description is left out (hover still shows it).
+        if (descQueue.length) {
+            descQueue.sort((a, b) => (b.first - a.first) || (b.point.mention_count - a.point.mention_count));
+            const placed = [];
+            const hits = (r, list, self) => list.some(o => o[4] !== self && r[0] < o[2] && r[2] > o[0] && r[1] < o[3] && r[3] > o[1]);
+            for (const q of descQueue) {
+                const dfs = Math.max(11, q.fs * 0.74);
+                ctx.font = `400 ${dfs}px ${FONT_SANS}`;
+                const lines = descLines(q.point, dfs);
+                const top = q.sy + q.fs * 0.62;
+                const w = Math.max(...lines.map(l => ctx.measureText(l).width));
+                const r = [q.lx - 2, top, q.lx + w + 2, top + lines.length * dfs * 1.22 + 2, q.point];
+                if (!q.first && (hits(r, nameRects, q.point) || hits(r, placed, null))) continue;
+                placed.push(r);
+                ctx.textAlign = 'left';
+                ctx.textBaseline = 'middle';
+                ctx.lineJoin = 'round';
+                ctx.lineWidth = Math.max(2.2, dfs * 0.22);
+                ctx.strokeStyle = `rgba(20, 18, 17, ${q.da * 0.8})`;
+                ctx.fillStyle = `rgba(214, 205, 189, ${q.da})`;
+                let ly = top + dfs * 0.75;
+                for (const line of lines) {
+                    ctx.strokeText(line, q.lx, ly);
+                    ctx.fillText(line, q.lx, ly);
+                    ly += dfs * 1.22;
+                }
             }
         }
 
