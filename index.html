@@ -226,7 +226,6 @@
         #filters .check input:focus-visible { outline: 2px solid var(--cyan); outline-offset: 2px; }
         #filters .ring { width: 10px; height: 10px; border-radius: 50%; border: 1.5px solid var(--yellow); flex: none; }
         #filter-count { margin-top: 2px; font-size: 15px; color: var(--chalk); font-weight: 500; font-variant-numeric: tabular-nums; }
-        #corpus-note { margin-top: 1px; font-size: 14px; color: var(--chalk-dim); }
 
         /* ---------- Cassette labels (tooltip, deep panel) ---------- */
         .jcard {
@@ -372,7 +371,6 @@
                 Research projects only
             </label>
             <div id="filter-count"></div>
-            <div id="corpus-note"></div>
         </div>
     </div>
 
@@ -711,7 +709,7 @@
         data = await resp.json();
 
         // Version + last-updated note — bump APP_VERSION on notable UX/pipeline changes.
-        const APP_VERSION = 'v1.22';
+        const APP_VERSION = 'v1.23';
         tagCounts = {};
         for (const p of data.points) for (const t of p.tags || []) tagCounts[t] = (tagCounts[t] || 0) + 1;
         // The research filter only appears once the map has research projects.
@@ -725,11 +723,6 @@
         } else {
             document.getElementById('last-updated').textContent =
                 `${APP_VERSION} · created by Dan Ledger`;
-        }
-
-        if (data.total_articles) {
-            document.getElementById('corpus-note').textContent =
-                `Drawn from ${data.total_articles.toLocaleString()} articles`;
         }
 
         minX = Infinity; maxX = -Infinity;
@@ -854,8 +847,8 @@
         const shown = data.points.filter(isPointVisible).length;
         document.getElementById('filter-count').textContent =
             shown === data.points.length
-                ? `${data.points.length.toLocaleString()} companies`
-                : `${shown.toLocaleString()} of ${data.points.length.toLocaleString()} companies`;
+                ? `${data.points.length.toLocaleString()} entities`
+                : `${shown.toLocaleString()} of ${data.points.length.toLocaleString()} entities`;
     }
 
     function resize() {
