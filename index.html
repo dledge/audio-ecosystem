@@ -152,6 +152,37 @@
             color: var(--lcd-text);
         }
         #search:focus-visible { outline: 2px solid var(--cyan); outline-offset: 2px; }
+        .search-wrap { position: relative; }
+        /* Tag suggestions: an LCD drop-down under the search strip */
+        #tag-suggest {
+            position: absolute; left: 0; right: 0; top: calc(100% + 4px); z-index: 60;
+            margin: 0; padding: 4px 0; list-style: none;
+            background: var(--lcd); border: 1px solid #0b0b0d; border-radius: 4px;
+            box-shadow: 0 8px 20px rgba(0, 0, 0, 0.55);
+            max-height: 320px; overflow-y: auto;
+        }
+        #tag-suggest[hidden] { display: none; }
+        #tag-suggest li { padding: 6px 10px; cursor: pointer; color: var(--lcd-text); }
+        #tag-suggest li .t { font: 500 15px var(--cond); letter-spacing: 0.03em; }
+        #tag-suggest li .t mark { background: none; color: var(--yellow); }
+        #tag-suggest li .n { float: right; color: rgba(159, 245, 201, 0.6); font-variant-numeric: tabular-nums; }
+        #tag-suggest li .d { display: block; font-size: 12.5px; color: rgba(159, 245, 201, 0.6); line-height: 1.3; margin-top: 1px; }
+        #tag-suggest li[aria-selected="true"] { background: rgba(159, 245, 201, 0.12); }
+        #tag-suggest .head { padding: 4px 10px 2px; font-size: 12px; color: rgba(159, 245, 201, 0.5); cursor: default; }
+        #tag-chip {
+            display: flex; align-items: center; gap: 8px; margin-top: 8px;
+            padding: 4px 6px 4px 10px; border-radius: 4px;
+            background: rgba(255, 210, 63, 0.12); border: 1px solid rgba(255, 210, 63, 0.45);
+            color: var(--chalk); font-size: 14px;
+        }
+        #tag-chip[hidden] { display: none; }
+        #tag-chip .label { flex: 1; }
+        #tag-chip .label b { color: var(--yellow); font-weight: 600; }
+        #tag-chip button {
+            border: none; background: none; color: var(--chalk); font-size: 18px; line-height: 1;
+            cursor: pointer; padding: 0 4px; border-radius: 3px;
+        }
+        #tag-chip button:focus-visible { outline: 2px solid var(--cyan); }
         #search::placeholder { color: rgba(159, 245, 201, 0.45); }
 
         #filters { margin-top: 12px; font-size: 14.5px; color: var(--chalk-dim); }
@@ -322,7 +353,15 @@
             <div class="speaker" aria-hidden="true"></div>
         </div>
         <div class="sub">Who builds sound, clustered by what they do</div>
-        <input type="text" id="search" placeholder="Search companies" aria-label="Search companies">
+        <div class="search-wrap">
+            <input type="text" id="search" placeholder="Search companies or tags" aria-label="Search companies or tags"
+                   role="combobox" aria-autocomplete="list" aria-expanded="false" aria-controls="tag-suggest" autocomplete="off">
+            <ul id="tag-suggest" role="listbox" aria-label="Tags" hidden></ul>
+        </div>
+        <div id="tag-chip" hidden>
+            <span class="label"></span>
+            <button type="button" id="tag-clear" aria-label="Clear tag filter">&times;</button>
+        </div>
         <div id="filters">
             <label for="mention-slider">Min mentions <span class="val" id="mention-val">2</span></label>
             <input type="range" id="mention-slider" min="1" max="20" value="2">
@@ -436,6 +475,9 @@
     let dragging = false;
     let dragStartX, dragStartY;
     let searchTerm = '';
+    let activeTag = null;       // a tag picked from the search suggestions: highlight its companies
+    let tagCounts = {};         // {tag: companies on the map carrying it}
+    let suggestIdx = -1;
     let hoveredPoint = null;
     let mentionThreshold = 2;
     let scoreThreshold = 0.3;
@@ -615,14 +657,34 @@
         document.getElementById('zoom-in').addEventListener('click', () => { targetZoom = Math.min(50, targetZoom * 1.3); });
         document.getElementById('zoom-out').addEventListener('click', () => { targetZoom = Math.max(MIN_ZOOM, targetZoom / 1.3); });
         document.getElementById('zoom-reset').addEventListener('click', () => { targetZoom = MIN_ZOOM; targetOffsetX = 0; targetOffsetY = 0; });
-        document.getElementById('search').addEventListener('input', (e) => { searchTerm = e.target.value.toLowerCase(); });
-        // Esc clears the search, wherever the focus is.
+        const box = document.getElementById('search');
+        box.addEventListener('input', (e) => { searchTerm = e.target.value.toLowerCase(); showSuggestions(); });
+        box.addEventListener('focus', showSuggestions);
+        box.addEventListener('blur', () => setTimeout(hideSuggestions, 120));
+        box.addEventListener('keydown', (e) => {
+            const items = [...document.querySelectorAll('#tag-suggest li[data-tag]')];
+            if (!items.length || document.getElementById('tag-suggest').hidden) return;
+            if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
+                e.preventDefault();
+                suggestIdx = (suggestIdx + (e.key === 'ArrowDown' ? 1 : -1) + items.length) % items.length;
+                items.forEach((li, i) => li.setAttribute('aria-selected', i === suggestIdx ? 'true' : 'false'));
+                items[suggestIdx].scrollIntoView({ block: 'nearest' });
+            } else if (e.key === 'Enter' && suggestIdx >= 0) {
+                e.preventDefault();
+                pickTag(items[suggestIdx].dataset.tag);
+            }
+        });
+        document.getElementById('tag-suggest').addEventListener('mousedown', (e) => {
+            const li = e.target.closest('li[data-tag]');
+            if (li) { e.preventDefault(); pickTag(li.dataset.tag); }
+        });
+        document.getElementById('tag-clear').addEventListener('click', () => setTag(null));
+        // Esc: close the suggestions, then clear the text, then the tag; wherever the focus is.
         document.addEventListener('keydown', (e) => {
             if (e.key !== 'Escape') return;
-            const box = document.getElementById('search');
-            if (!box.value && !searchTerm) return;
-            box.value = ''; searchTerm = '';
-            box.blur();
+            if (!document.getElementById('tag-suggest').hidden) { hideSuggestions(); return; }
+            if (box.value || searchTerm) { box.value = ''; searchTerm = ''; box.blur(); return; }
+            if (activeTag) setTag(null);
         });
         document.getElementById('mention-slider').addEventListener('input', (e) => {
             mentionThreshold = +e.target.value;
@@ -649,7 +711,9 @@
         data = await resp.json();
 
         // Version + last-updated note — bump APP_VERSION on notable UX/pipeline changes.
-        const APP_VERSION = 'v1.21';
+        const APP_VERSION = 'v1.22';
+        tagCounts = {};
+        for (const p of data.points) for (const t of p.tags || []) tagCounts[t] = (tagCounts[t] || 0) + 1;
         // The research filter only appears once the map has research projects.
         document.getElementById('research-filter').hidden = !data.points.some(p => p.research);
         if (data.generated_at) {
@@ -731,6 +795,58 @@
         if (scoreThreshold > 0 && point.score != null && point.score < scoreThreshold) return false;
         if (researchOnly && !point.research) return false;
         return true;
+    }
+
+    // --- Tag search: suggestions match anywhere in a tag's name ---
+    function tagLabel(t) { return t.replace(/_/g, ' ').toLowerCase(); }
+
+    function hideSuggestions() {
+        const ul = document.getElementById('tag-suggest');
+        ul.hidden = true; suggestIdx = -1;
+        document.getElementById('search').setAttribute('aria-expanded', 'false');
+    }
+
+    function showSuggestions() {
+        const ul = document.getElementById('tag-suggest');
+        const q = searchTerm.trim();
+        if (!data || q.length < 2) { hideSuggestions(); return; }
+        const info = data.tag_info || {};
+        const hits = Object.keys(tagCounts)
+            .filter(t => tagLabel(t).includes(q))
+            .sort((a, b) => (tagLabel(a).startsWith(q) ? 0 : 1) - (tagLabel(b).startsWith(q) ? 0 : 1)
+                            || tagCounts[b] - tagCounts[a])
+            .slice(0, 8);
+        if (!hits.length) { hideSuggestions(); return; }
+        const esc = s => s.replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
+        ul.innerHTML = '<li class="head" aria-hidden="true">Tags</li>' + hits.map(t => {
+            const label = tagLabel(t), i = label.indexOf(q);
+            const marked = esc(label.slice(0, i)) + '<mark>' + esc(label.slice(i, i + q.length)) + '</mark>' + esc(label.slice(i + q.length));
+            return `<li role="option" aria-selected="false" data-tag="${esc(t)}"><span class="t">${marked}</span>`
+                 + `<span class="n">${tagCounts[t]}</span>`
+                 + (info[t] ? `<span class="d">${esc(info[t])}</span>` : '') + '</li>';
+        }).join('');
+        suggestIdx = -1;
+        ul.hidden = false;
+        document.getElementById('search').setAttribute('aria-expanded', 'true');
+    }
+
+    function pickTag(t) {
+        const box = document.getElementById('search');
+        box.value = ''; searchTerm = '';
+        hideSuggestions();
+        setTag(t);
+    }
+
+    function setTag(t) {
+        activeTag = t;
+        const chip = document.getElementById('tag-chip');
+        if (t) {
+            chip.querySelector('.label').innerHTML =
+                `Tag: <b></b> \u00b7 ${(tagCounts[t] || 0).toLocaleString()} companies`;
+            chip.querySelector('.label b').textContent = tagLabel(t);
+            chip.title = (data.tag_info || {})[t] || '';
+        }
+        chip.hidden = !t;
     }
 
     function updateFilterCount() {
@@ -929,8 +1045,11 @@
             const [sx, sy] = toScreen(point.x, point.y);
             if (sx < -80 || sx > width + 80 || sy < -80 || sy > height + 80) continue;
 
-            const isSearchMatch = searchTerm && point.name.toLowerCase().includes(searchTerm);
-            const isSearchActive = searchTerm.length > 0;
+            const isSearchActive = searchTerm.length > 0 || activeTag !== null;
+            const isSearchMatch = isSearchActive
+                && (!activeTag || (point.tags || []).includes(activeTag))
+                && (!searchTerm || point.name.toLowerCase().includes(searchTerm)
+                    || (!activeTag && (point.tags || []).some(t => tagLabel(t).includes(searchTerm))));
             const isHovered = hoveredPoint === point;
 
             let radius = getRadius(point, zoom);
@@ -1174,7 +1293,9 @@
         // Bullets are embedded on each point in data.json at build time —
         // no network call needed. This makes the viz fully static for
         // Vercel deployment.
-        const raw = (point.bullets || '').split('\n').filter(Boolean);
+        // Labelled lines ("Used in: cars") when the map has them; the bare
+        // embedding lines read like sub-points of each other.
+        const raw = (point.bullets_display || point.bullets || '').split('\n').filter(Boolean);
         const bullets = raw.map(line => line.replace(/^\s*\d+\.\s*/, '').trim()).filter(Boolean);
         if (!bullets.length) return null;
         // Profile attributes (type, scale, geography...): shown, never embedded.
