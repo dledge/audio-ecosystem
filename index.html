@@ -220,7 +220,7 @@
         }
         #filters input[type=range]:focus-visible { outline: 2px solid var(--cyan); outline-offset: 2px; }
         /* Counts read like the tape counter */
-        #filters .check { display: flex; align-items: center; gap: 8px; margin: 8px 0 4px; cursor: pointer; }
+        #filters .check { display: flex; justify-content: flex-start; align-items: center; gap: 8px; margin: 8px 0 4px; cursor: pointer; }
         #filters .check[hidden] { display: none; }
         #filters .check input { accent-color: var(--yellow); margin: 0; }
         #filters .check input:focus-visible { outline: 2px solid var(--cyan); outline-offset: 2px; }
@@ -709,7 +709,7 @@
         data = await resp.json();
 
         // Version + last-updated note — bump APP_VERSION on notable UX/pipeline changes.
-        const APP_VERSION = 'v1.23';
+        const APP_VERSION = 'v1.24';
         tagCounts = {};
         for (const p of data.points) for (const t of p.tags || []) tagCounts[t] = (tagCounts[t] || 0) + 1;
         // The research filter only appears once the map has research projects.
@@ -1129,8 +1129,9 @@
         }
 
         // Descriptions under names (deepest zoom): hovered/searched first, then
-        // the most-covered companies; any that would overlap a name or an
-        // already drawn description is left out (hover still shows it).
+        // the most-covered companies. One blocked below its name (by a name or
+        // an already drawn description) goes above it instead; blocked both
+        // ways, it is left out (hover still shows it).
         if (descQueue.length) {
             descQueue.sort((a, b) => (b.first - a.first) || (b.point.mention_count - a.point.mention_count));
             const placed = [];
@@ -1139,11 +1140,18 @@
                 const dfs = Math.max(11, q.fs * 0.74);
                 ctx.font = `400 ${dfs}px ${FONT_SANS}`;
                 const lines = descLines(q.point, dfs);
-                const top = q.sy + q.fs * 0.62;
                 const w = Math.max(...lines.map(l => ctx.measureText(l).width));
-                const r = [q.lx - 2, top, q.lx + w + 2, top + lines.length * dfs * 1.22 + 2, q.point];
-                if (!q.first && (hits(r, nameRects, q.point) || hits(r, placed, null))) continue;
-                placed.push(r);
+                const h = lines.length * dfs * 1.22 + 2;
+                // Under the name first; if that is blocked, above it.
+                const below = q.sy + q.fs * 0.62, above = q.sy - q.fs * 0.62 - h;
+                const rectAt = t => [q.lx - 2, t, q.lx + w + 2, t + h, q.point];
+                const free = r => !hits(r, nameRects, q.point) && !hits(r, placed, null);
+                let top = below;
+                if (!q.first && !free(rectAt(below))) {
+                    if (!free(rectAt(above))) continue;
+                    top = above;
+                }
+                placed.push(rectAt(top));
                 ctx.textAlign = 'left';
                 ctx.textBaseline = 'middle';
                 ctx.lineJoin = 'round';
